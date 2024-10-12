@@ -107,9 +107,9 @@ class TemplateSettings(BaseModel):
         The parser of the template
     """
 
-    type: str = Field(default="jinja2")
-    parser: str = Field(default="")
-
+    type: str = Field("jinja2")
+    parser: str = Field("prompty")
+    parse_inline_images: bool = Field(default=True)  
 
 class Prompty(BaseModel):
     """Prompty class to define the prompty

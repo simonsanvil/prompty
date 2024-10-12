@@ -60,7 +60,7 @@ class PromptyChatParser(Invoker):
         # regular expression to parse markdown images
         image = r"(?P<alt>!\[[^\]]*\])\((?P<filename>.*?)(?=\"|\))\)"
         matches = re.findall(image, content, flags=re.MULTILINE)
-        if len(matches) > 0 and self.prompty.model.configuration.get("inline_images", True):
+        if len(matches) > 0 and self.prompty.template.parse_inline_images:
             content_items = []
             content_chunks = re.split(image, content, flags=re.MULTILINE)
             current_chunk = 0
