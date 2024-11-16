@@ -16,9 +16,9 @@ from typing import Any, Callable, Dict, Iterator, List
 # clean up key value pairs for sensitive values
 def sanitize(key: str, value: Any) -> Any:
     if isinstance(value, str) and any(
-        [s in key.lower() for s in ["key", "token", "secret", "password", "credential"]]
+        [s in key.lower() for s in ["key", "secret", "password", "credential"]]
     ):
-        return len(str(value)) * "*"
+        return 10 * "*"
     elif isinstance(value, dict):
         return {k: sanitize(k, v) for k, v in value.items()}
     else:
@@ -27,6 +27,10 @@ def sanitize(key: str, value: Any) -> Any:
 
 class Tracer:
     _tracers: Dict[str, Callable[[str], Iterator[Callable[[str, Any], None]]]] = {}
+
+    SIGNATURE = "signature"
+    INPUTS = "inputs"
+    RESULT = "result"
 
     @classmethod
     def add(
@@ -40,11 +44,17 @@ class Tracer:
 
     @classmethod
     @contextlib.contextmanager
-    def start(cls, name: str) -> Iterator[Callable[[str, Any], None]]:
+    def start(cls, name: str, attributes: Dict[str, Any] = None) -> Iterator[Callable[[str, Any], None]]:
         with contextlib.ExitStack() as stack:
             traces = [
                 stack.enter_context(tracer(name)) for tracer in cls._tracers.values()
             ]
+
+            if attributes:
+                for trace in traces:
+                    for key, value in attributes.items():
+                        trace(key, value)
+
             yield lambda key, value: [
                 # normalize and sanitize any trace values
                 trace(key, sanitize(key, to_dict(value)))
@@ -88,11 +98,16 @@ def _name(func: Callable, args):
     else:
         signature = f"{func.__module__}.{func.__name__}"
 
-    # core invoker gets special treatment
-    core_invoker = signature == "prompty.core.Invoker.__call__"
+    # core invoker gets special treatment prompty.invoker.Invoker
+    core_invoker = signature.startswith("prompty.invoker.Invoker.run")
     if core_invoker:
         name = type(args[0]).__name__
-        signature = f"{args[0].__module__}.{args[0].__class__.__name__}.invoke"
+        if signature.endswith("async"):
+            signature = (
+                f"{args[0].__module__}.{args[0].__class__.__name__}.invoke_async"
+            )
+        else:
+            signature = f"{args[0].__module__}.{args[0].__class__.__name__}.invoke"
     else:
         name = func.__name__
 
@@ -113,20 +128,29 @@ def _results(result: Any) -> dict:
 
 
 def _trace_sync(
-    func: Callable = None, *, description: str = None, itemtype: str = None
+    func: Callable = None, **okwargs: Any
 ) -> Callable:
-    description = description or ""
 
     @wraps(func)
     def wrapper(*args, **kwargs):
         name, signature = _name(func, args)
-        with Tracer.start(name) as trace:
-            trace("signature", signature)
-            if description and description != "":
-                trace("description", description)
+        altname: str = None
+        # special case
+        if "name" in okwargs:
+            altname = name
+            name = okwargs["name"]
+            del okwargs["name"]
 
-            if itemtype and itemtype != "":
-                trace("type", itemtype)
+        with Tracer.start(name) as trace:
+            if altname != None:
+                trace("function", altname)
+
+            trace("signature", signature)
+
+            # support arbitrary keyword
+            # arguments for trace decorator
+            for k, v in okwargs.items():
+                trace(k, to_dict(v))
 
             inputs = _inputs(func, args, kwargs)
             trace("inputs", inputs)
@@ -158,20 +182,29 @@ def _trace_sync(
 
 
 def _trace_async(
-    func: Callable = None, *, description: str = None, itemtype: str = None
+    func: Callable = None, **okwargs: Any
 ) -> Callable:
-    description = description or ""
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
         name, signature = _name(func, args)
-        with Tracer.start(name) as trace:
-            trace("signature", signature)
-            if description and description != "":
-                trace("description", description)
+        altname: str = None
+        # special case
+        if "name" in okwargs:
+            altname = name
+            name = okwargs["name"]
+            del okwargs["name"]
 
-            if itemtype and itemtype != "":
-                trace("type", itemtype)
+        with Tracer.start(name) as trace:
+            if altname != None:
+                trace("function", altname)
+                
+            trace("signature", signature)
+
+            # support arbitrary keyword
+            # arguments for trace decorator
+            for k, v in okwargs.items():
+                trace(k, to_dict(v))
 
             inputs = _inputs(func, args, kwargs)
             trace("inputs", inputs)
@@ -201,15 +234,11 @@ def _trace_async(
     return wrapper
 
 
-def trace(
-    func: Callable = None, *, description: str = None, itemtype: str = None
-) -> Callable:
+def trace(func: Callable = None, **kwargs: Any) -> Callable:
     if func is None:
-        return partial(trace, description=description, itemtype=itemtype)
-
+        return partial(trace, **kwargs)
     wrapped_method = _trace_async if inspect.iscoroutinefunction(func) else _trace_sync
-
-    return wrapped_method(func, description=description, itemtype=itemtype)
+    return wrapped_method(func, **kwargs)
 
 
 class PromptyTracer:
